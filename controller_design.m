@@ -21,7 +21,7 @@ zeta = delB.zeta;
 w1   = delB.wn_rad_s;        
 
 %% --- alpha from phase margin (EQ 12.9) 
-alpha = (1 - sind(45 - PM_deg)) / (1 + sind(45 - PM_deg));
+alpha = alpha_from_phase_lead(45 - PM_deg);
 
 % Reference quantities 
 v_weeding = p.spec.driving_speed_nom_mps / ref_nom.a2p;
@@ -111,8 +111,4 @@ controller.B = struct('wc_rad_s', wcB, 'kj', kjB, 'ka', kaB, 'kv', kvB, ...
 controller.t = t;
 controller.recommended = 'B';   
 
-end
-
-function s = ternary(cond, a, b)
-if cond; s = a; else; s = b; end
 end

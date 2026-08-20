@@ -1,5 +1,7 @@
 close all; clc;
 
+addpath('utils');
+
 %% Extract data
 t = simout.time;
 u = simout.signals.values(:,1);   % input voltage [V]
@@ -160,9 +162,7 @@ save('Hm_frd_deliverable_P_smooth.mat', ...
 
 %% Plot raw and smoothed Bode
 figure;
-opts = bodeoptions;
-opts.FreqUnits = 'Hz';
-opts.PhaseWrapping = 'on';
+opts = bode_options('FreqUnits', 'Hz', 'PhaseWrapping', 'on');
 
 bodeplot(Hm_frd, Hm_frd_smooth, opts);
 grid on;
@@ -187,10 +187,7 @@ title('FFT of measured angle');
 
 %% Bode plot of measured frequency response
 figure;
-opts = bodeoptions;
-opts.FreqUnits = 'Hz';
-opts.XLim = [min(f_meas) max(f_meas)];
-opts.PhaseWrapping = 'off';
+opts = bode_options('FreqUnits', 'Hz', 'XLim', [min(f_meas) max(f_meas)]);
 
 bodeplot(Hm_frd_smooth,'r.',opts);
 grid on

@@ -29,29 +29,24 @@ controller_discrete_tustin = c2d( ...
 openLoop_discrete_original = controller_discrete_tustin * plant_discrete_zoh;
 closedLoop_discrete_original = feedback(openLoop_discrete_original, 1);
 
-[gainMargin_cont_abs, phaseMargin_cont_deg, ...
-    phaseCrossFreq_cont_rad_s, gainCrossFreq_cont_rad_s] = ...
-    margin(openLoop_continuous);
+margins_cont = loop_margins(openLoop_continuous);
+margins_disc = loop_margins(openLoop_discrete_original);
 
-[gainMargin_disc_abs, phaseMargin_disc_deg, ...
-    phaseCrossFreq_disc_rad_s, gainCrossFreq_disc_rad_s] = ...
-    margin(openLoop_discrete_original);
-
-phaseMarginLoss_deg = phaseMargin_cont_deg - phaseMargin_disc_deg;
+phaseMarginLoss_deg = margins_cont.PM_deg - margins_disc.PM_deg;
 crossoverShift_percent = ...
-    (gainCrossFreq_disc_rad_s - gainCrossFreq_cont_rad_s)/gainCrossFreq_cont_rad_s*100;
+    (margins_disc.wcp_rad_s - margins_cont.wcp_rad_s)/margins_cont.wcp_rad_s*100;
 
-numUnstablePoles_original = sum(abs(pole(closedLoop_discrete_original)) > 1);
-isClosedLoopStable_original = (numUnstablePoles_original == 0);
+[numUnstablePoles_original, isClosedLoopStable_original] = ...
+    discrete_pole_stability(closedLoop_discrete_original);
 
 %% Step j.2: Quantify phase-lag source
-zohHalfSampleLag_deg = sampleTime_s * gainCrossFreq_cont_rad_s / 2 * (180/pi);
+zohHalfSampleLag_deg = sampleTime_s * margins_cont.wcp_rad_s / 2 * (180/pi);
 
 tustinWarpedFreq_rad_s = ...
-    2/sampleTime_s * tan(gainCrossFreq_cont_rad_s*sampleTime_s/2);
+    2/sampleTime_s * tan(margins_cont.wcp_rad_s*sampleTime_s/2);
 
 tustinWarp_percent = ...
-    (tustinWarpedFreq_rad_s - gainCrossFreq_cont_rad_s)/gainCrossFreq_cont_rad_s*100;
+    (tustinWarpedFreq_rad_s - margins_cont.wcp_rad_s)/margins_cont.wcp_rad_s*100;
 
 %% Step j.3: Retune controller for discrete implementation
 desiredDiscretePhaseMargin_deg = 30;
@@ -63,33 +58,23 @@ currentLeadPhase_deg = asind( ...
     (1 - sim_out.alpha) / ...
     (1 + sim_out.alpha));
 
-extraLeadRequired_deg = targetContinuousPhaseMargin_deg - phaseMargin_cont_deg;
+extraLeadRequired_deg = targetContinuousPhaseMargin_deg - margins_cont.PM_deg;
 
 if extraLeadRequired_deg <= 0
     retunedAlpha = sim_out.alpha;
 else
     newLeadPhase_deg = min(currentLeadPhase_deg + extraLeadRequired_deg, 78);
 
-    retunedAlpha = ...
-        (1 - sind(newLeadPhase_deg)) / ...
-        (1 + sind(newLeadPhase_deg));
-
-    retunedAlpha = max(0.001, min(0.999, retunedAlpha));
+    retunedAlpha = alpha_from_phase_lead(newLeadPhase_deg, [0.001 0.999]);
 end
 
-retunedZeroTimeConstant_s = sqrt(1/retunedAlpha)/targetCrossover_rad_s;
-retunedIntegralTimeConstant_s = beta*retunedZeroTimeConstant_s;
-retunedPoleTimeConstant_s = ...
-    1/(targetCrossover_rad_s*sqrt(1/retunedAlpha));
+[controller_continuous_retunedForDiscretisation, retunedGains] = ...
+    build_pid_lead(m_eq, targetCrossover_rad_s, retunedAlpha, beta, s);
 
-retunedProportionalGain = ...
-    m_eq*targetCrossover_rad_s^2/sqrt(1/retunedAlpha);
-
-controller_continuous_retunedForDiscretisation = ...
-    retunedProportionalGain * ...
-    (retunedZeroTimeConstant_s*s + 1) * ...
-    (retunedIntegralTimeConstant_s*s + 1) / ...
-    ((retunedPoleTimeConstant_s*s + 1)*retunedIntegralTimeConstant_s*s);
+retunedZeroTimeConstant_s = retunedGains.tau_z;
+retunedIntegralTimeConstant_s = retunedGains.tau_i;
+retunedPoleTimeConstant_s = retunedGains.tau_p;
+retunedProportionalGain = retunedGains.kp;
 
 openLoop_continuous_retunedForDiscretisation = ...
     controller_continuous_retunedForDiscretisation * plant_voltage_to_sensor_reduced;
@@ -104,46 +89,25 @@ openLoop_discrete_retuned = ...
 
 closedLoop_discrete_retuned = feedback(openLoop_discrete_retuned, 1);
 
-[gainMargin_contRetuned_abs, phaseMargin_contRetuned_deg, ...
-    ~, gainCrossFreq_contRetuned_rad_s] = ...
-    margin(openLoop_continuous_retunedForDiscretisation);
+margins_contRetuned = loop_margins(openLoop_continuous_retunedForDiscretisation);
+margins_discRetuned = loop_margins(openLoop_discrete_retuned);
 
-[gainMargin_discRetuned_abs, phaseMargin_discRetuned_deg, ...
-    phaseCrossFreq_discRetuned_rad_s, gainCrossFreq_discRetuned_rad_s] = ...
-    margin(openLoop_discrete_retuned);
-
-numUnstablePoles_retuned = sum(abs(pole(closedLoop_discrete_retuned)) > 1);
-isClosedLoopStable_retuned = (numUnstablePoles_retuned == 0);
+[numUnstablePoles_retuned, isClosedLoopStable_retuned] = ...
+    discrete_pole_stability(closedLoop_discrete_retuned);
 
 %% Summary table
-fprintf('\n--- Deliverable j summary table ---\n');
-fprintf('%-48s  %8s  %8s  %8s\n', ...
-    'Configuration','wc(rad/s)','PM(deg)','GM(dB)');
-
-fprintf('%-48s  %8.1f  %8.1f  %8.1f\n', ...
+print_margin_table('--- Deliverable j summary table ---', 48, { ...
     'Continuous, original alpha', ...
-    gainCrossFreq_cont_rad_s, ...
-    phaseMargin_cont_deg, ...
-    20*log10(gainMargin_cont_abs));
-
-fprintf('%-48s  %8.1f  %8.1f  %8.1f\n', ...
+        margins_cont.wcp_rad_s, margins_cont.PM_deg, margins_cont.GM_dB; ...
     'Discrete Tustin + ZOH, original alpha', ...
-    gainCrossFreq_disc_rad_s, ...
-    phaseMargin_disc_deg, ...
-    20*log10(gainMargin_disc_abs));
-
-fprintf('%-48s  %8.1f  %8.1f  %8.1f\n', ...
+        margins_disc.wcp_rad_s, margins_disc.PM_deg, margins_disc.GM_dB; ...
     'Discrete Tustin + ZOH, retuned alpha', ...
-    gainCrossFreq_discRetuned_rad_s, ...
-    phaseMargin_discRetuned_deg, ...
-    20*log10(gainMargin_discRetuned_abs));
+        margins_discRetuned.wcp_rad_s, margins_discRetuned.PM_deg, margins_discRetuned.GM_dB});
 
 %% Figure j.1: Continuous vs discrete open-loop Bode
 
-opts = bodeoptions;
-opts.PhaseWrapping = 'off';
 % opts.PhaseWrappingBranch = -180;
-opts.XLim = [1 nyquistFrequency_rad_s];
+opts = bode_options('XLim', [1 nyquistFrequency_rad_s]);
 
 figure('Name','Deliverable j: Continuous vs Discrete OL Bode');
 bode( ...
@@ -157,16 +121,12 @@ legend( ...
     'Discrete, Tustin C_{retuned} + ZOH P', ...
     'Location','southwest');
 
-title('Deliverable j - Effect of discretisation on open-loop frequency response');
-grid on;
-set(findall(gcf,'Type','line'),'LineWidth',1.3);
+style_plot('Deliverable j - Effect of discretisation on open-loop frequency response');
 
 %% Figure j.2: Discrete open-loop margin plot, retuned
 figure('Name','Deliverable j: Discrete OL margin, retuned');
 margin(openLoop_discrete_retuned);
-title('Deliverable j - Discrete open-loop C_z(retuned) P_z(ZOH)');
-grid on;
-set(findall(gcf,'Type','line'),'LineWidth',1.3);
+style_plot('Deliverable j - Discrete open-loop C_z(retuned) P_z(ZOH)');
 
 %% Figure j.3: Discrete closed-loop pole-zero map
 figure('Name','Deliverable j: Discrete CL pole-zero map');
@@ -210,23 +170,23 @@ discretized_system.openLoop_continuous_retunedForDiscretisation = ...
 discretized_system.openLoop_discrete_retuned = openLoop_discrete_retuned;
 discretized_system.closedLoop_discrete_retuned = closedLoop_discrete_retuned;
 
-discretized_system.phaseMargin_continuous_deg = phaseMargin_cont_deg;
-discretized_system.phaseMargin_discrete_original_deg = phaseMargin_disc_deg;
-discretized_system.phaseMargin_discrete_retuned_deg = phaseMargin_discRetuned_deg;
+discretized_system.phaseMargin_continuous_deg = margins_cont.PM_deg;
+discretized_system.phaseMargin_discrete_original_deg = margins_disc.PM_deg;
+discretized_system.phaseMargin_discrete_retuned_deg = margins_discRetuned.PM_deg;
 discretized_system.phaseMarginLoss_deg = phaseMarginLoss_deg;
 
-discretized_system.gainMargin_continuous_dB = 20*log10(gainMargin_cont_abs);
-discretized_system.gainMargin_discrete_original_dB = 20*log10(gainMargin_disc_abs);
-discretized_system.gainMargin_discrete_retuned_dB = 20*log10(gainMargin_discRetuned_abs);
+discretized_system.gainMargin_continuous_dB = margins_cont.GM_dB;
+discretized_system.gainMargin_discrete_original_dB = margins_disc.GM_dB;
+discretized_system.gainMargin_discrete_retuned_dB = margins_discRetuned.GM_dB;
 
-discretized_system.crossover_continuous_rad_s = gainCrossFreq_cont_rad_s;
-discretized_system.crossover_discrete_original_rad_s = gainCrossFreq_disc_rad_s;
-discretized_system.crossover_discrete_retuned_rad_s = gainCrossFreq_discRetuned_rad_s;
+discretized_system.crossover_continuous_rad_s = margins_cont.wcp_rad_s;
+discretized_system.crossover_discrete_original_rad_s = margins_disc.wcp_rad_s;
+discretized_system.crossover_discrete_retuned_rad_s = margins_discRetuned.wcp_rad_s;
 discretized_system.crossoverShift_percent = crossoverShift_percent;
 
-discretized_system.phaseCrossFreq_continuous_rad_s = phaseCrossFreq_cont_rad_s;
-discretized_system.phaseCrossFreq_discrete_original_rad_s = phaseCrossFreq_disc_rad_s;
-discretized_system.phaseCrossFreq_discrete_retuned_rad_s = phaseCrossFreq_discRetuned_rad_s;
+discretized_system.phaseCrossFreq_continuous_rad_s = margins_cont.wcg_rad_s;
+discretized_system.phaseCrossFreq_discrete_original_rad_s = margins_disc.wcg_rad_s;
+discretized_system.phaseCrossFreq_discrete_retuned_rad_s = margins_discRetuned.wcg_rad_s;
 
 discretized_system.zohHalfSampleLag_deg = zohHalfSampleLag_deg;
 discretized_system.tustinWarpedFreq_rad_s = tustinWarpedFreq_rad_s;
@@ -257,15 +217,15 @@ discretized_system.alpha_orig = sim_out.alpha;
 discretized_system.Cz_retuned = controller_discrete_retunedForDiscretisation;
 discretized_system.OL_retuned = openLoop_discrete_retuned;
 discretized_system.CL_retuned = closedLoop_discrete_retuned;
-discretized_system.PM_cont = phaseMargin_cont_deg;
-discretized_system.PM_disc = phaseMargin_disc_deg;
-discretized_system.PM_retuned = phaseMargin_discRetuned_deg;
-discretized_system.GM_cont_dB = 20*log10(gainMargin_cont_abs);
-discretized_system.GM_disc_dB = 20*log10(gainMargin_disc_abs);
-discretized_system.GM_retuned_dB = 20*log10(gainMargin_discRetuned_abs);
-discretized_system.wc_cont = gainCrossFreq_cont_rad_s;
-discretized_system.wc_disc = gainCrossFreq_disc_rad_s;
-discretized_system.wc_retuned = gainCrossFreq_discRetuned_rad_s;
+discretized_system.PM_cont = margins_cont.PM_deg;
+discretized_system.PM_disc = margins_disc.PM_deg;
+discretized_system.PM_retuned = margins_discRetuned.PM_deg;
+discretized_system.GM_cont_dB = margins_cont.GM_dB;
+discretized_system.GM_disc_dB = margins_disc.GM_dB;
+discretized_system.GM_retuned_dB = margins_discRetuned.GM_dB;
+discretized_system.wc_cont = margins_cont.wcp_rad_s;
+discretized_system.wc_disc = margins_disc.wcp_rad_s;
+discretized_system.wc_retuned = margins_discRetuned.wcp_rad_s;
 discretized_system.phase_lag_ZoH_deg = zohHalfSampleLag_deg;
 
 end

@@ -82,6 +82,3 @@ nominal_size.u_req_check    = struct('u_v_V', u_v, 'u_J_V', u_J, 'u_k_V', u_k);
 % 
 % end
 
-function s = ternary(cond, a, b)
-if cond; s = a; else; s = b; end
-
