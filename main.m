@@ -4,6 +4,9 @@ clear; clc; close all
 addpath('spacar');
 addpath('spacar\spalight-1.38');
 
+% Shared helper functions 
+addpath('utils');
+
 % Load parameters 
 params = parameters(); 
 
@@ -23,8 +26,7 @@ params.mech.d_Nms_per_rad = nominal_plant_sizing.d_Nms_per_rad;
 s_var = tf('s');
 
 % Nominal Continuous plant: Voltage to Mirror Angle 
-P_nom = (params.mech.r_arm_m * params.actuator.Kf_N_per_A / params.actuator.R25_ohm) / ...
-    (params.mech.J_kgm2 * s_var^2 + params.mech.d_Nms_per_rad * s_var + params.mech.k_Nm_per_rad);
+P_nom = nominal_plant_tf(params.mech, params.actuator, s_var);
 
 % Controller design 
 controller_design = controller_design(params, nominal_plant_sizing, ref);
@@ -39,7 +41,7 @@ discretized_system = discretisation(params, controller_design, spacar_sim_out);
 ts = 5e-4;
 r_sensor = 0.052;
 
-[num_a, den_a] = tfdata(spacar_sim_out.plant_voltage_to_sensor_reduced, 'v');
-J_eq = abs(den_a(end-2) / num_a(end));    % s^2 coeff -- rotary inertia [kg*m^2]
-d_eq = abs(den_a(end-1) / num_a(end));    % s^1 coeff -- rotary damping [N*m*s/rad]
-k_eq = abs(den_a(end)   / num_a(end));
+equivalent = second_order_params(spacar_sim_out.plant_voltage_to_sensor_reduced);
+J_eq = equivalent.m_eq;   % s^2 coeff -- rotary inertia [kg*m^2]
+d_eq = equivalent.d_eq;   % s^1 coeff -- rotary damping [N*m*s/rad]
+k_eq = equivalent.k_eq;
