@@ -194,7 +194,28 @@ clc; clearvars -except discretized_system;
 
 addpath('utils');
 
-load('Hm_frd_deliverable_P_smooth.mat');
+measuredPlantFile = 'Hm_frd_deliverable_P_smooth.mat';
+
+if ~exist('discretized_system','var')
+    error('stabilityMargins:missingDiscretizedSystem', ...
+        ['Variable ''discretized_system'' not found. Run main.m (or discretisation) ', ...
+         'before this script.']);
+end
+
+if ~isfile(measuredPlantFile)
+    error('stabilityMargins:missingMeasurement', ...
+        'Measured plant file %s not found; run frequency_response_identification first.', ...
+        measuredPlantFile);
+end
+
+loaded = load(measuredPlantFile);
+
+if ~isfield(loaded, 'Hm_frd_smooth')
+    error('stabilityMargins:missingVariable', ...
+        '%s does not contain the smoothed FRD object ''Hm_frd_smooth''.', measuredPlantFile);
+end
+
+Hm_frd_smooth = loaded.Hm_frd_smooth;
 
 Ts = discretized_system.Cz_retuned.Ts;
 Hm_frd_smooth.Ts = Ts;
@@ -205,6 +226,14 @@ C_old = discretized_system.Cz_retuned;
 L_old = P * C_old;
 
 margins_old = loop_margins(L_old);
+
+if ~has_valid_crossover(margins_old)
+    warning('stabilityMargins:noBaselineCrossover', ...
+        'Existing controller has no valid gain crossover against the measured plant.');
+else
+    fprintf('Existing controller: PM = %.2f deg at %.2f Hz, GM = %.2f dB (Wcg = %.2f rad/s)\n', ...
+        margins_old.PM_deg, margins_old.fc_hz, margins_old.GM_dB, margins_old.wcg_rad_s);
+end
 
 % Targets
 fc_target = 100;      % Hz
@@ -228,6 +257,8 @@ best.GM_dB = NaN;
 
 fprintf('Starting fast grid search...\n\n');
 
+numSkippedCandidates = 0;
+
 for K = K_range
     for alpha = alpha_range
         for fc_lead = fc_lead_range
@@ -242,6 +273,9 @@ for K = K_range
             margins_try = loop_margins(L_try);
 
             if ~has_valid_crossover(margins_try)
+                % No usable crossover for this candidate; counted so the run
+                % reports how much of the grid was discarded.
+                numSkippedCandidates = numSkippedCandidates + 1;
                 continue
             end
 
@@ -287,6 +321,29 @@ for K = K_range
     end
 end
 
+fprintf('\nCandidates skipped for lack of a valid crossover: %d\n', numSkippedCandidates);
+
+% Without this check a failed search silently builds a controller from NaN
+% parameters and reports NaN margins as if they were a result.
+if ~isfinite(best.J) || ~isfinite(best.K) || ~isfinite(best.alpha) || ~isfinite(best.fc_lead)
+    error('stabilityMargins:noCandidateFound', ...
+        ['Grid search found no candidate with a valid gain crossover ', ...
+         '(%d candidates skipped). Widen K_range, alpha_range or fc_lead_range.'], ...
+        numSkippedCandidates);
+end
+
+if best.PM < PM_min || best.PM > PM_max
+    warning('stabilityMargins:phaseMarginOutOfRange', ...
+        ['Best candidate has PM = %.2f deg, outside the requested [%.0f, %.0f] deg ', ...
+         'range (fc = %.2f Hz).'], best.PM, PM_min, PM_max, best.fc);
+end
+
+if abs(best.fc - fc_target) >= 2
+    warning('stabilityMargins:crossoverOffTarget', ...
+        'Best candidate crossover is %.2f Hz against a target of %.2f Hz.', ...
+        best.fc, fc_target);
+end
+
 % Build final controller
 K_opt = best.K;
 alpha_opt = best.alpha;
@@ -305,6 +362,11 @@ grid on;
 title('Final Fast-Optimized Open-Loop Margin');
 
 margins_smooth = loop_margins(L_smooth);
+
+if ~has_valid_crossover(margins_smooth)
+    error('stabilityMargins:noFinalCrossover', ...
+        'The final controller has no valid gain crossover against the measured plant.');
+end
 
 fprintf('\nFinal optimized controller:\n');
 fprintf('K        = %.6g\n', K_opt);

@@ -1,3 +1,14 @@
+if ~exist('discretized_system','var')
+    error('comparison:missingDiscretizedSystem', ...
+        'Variable ''discretized_system'' not found. Run main.m before this script.');
+end
+
+if ~exist('Hm_frd_smooth','var')
+    error('comparison:missingMeasurement', ...
+        ['Variable ''Hm_frd_smooth'' not found. Run frequency_response_identification ', ...
+         'or load Hm_frd_deliverable_P_smooth.mat first.']);
+end
+
 wtest = 2*pi*[1 5 10 25 50 100];
 
 P_model = squeeze(freqresp(discretized_system.Pz_zoh,wtest));

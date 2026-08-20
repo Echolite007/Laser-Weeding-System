@@ -2,6 +2,30 @@ close all; clc;
 
 addpath('utils');
 
+%% Required workspace data
+if ~exist('simout','var')
+    error('frequencyResponseIdentification:missingMeasurement', ...
+        ['Variable ''simout'' not found. Run the hardware/Simulink experiment (or load a ', ...
+         'logged run) before running this script.']);
+end
+
+if ~exist('ts','var')
+    error('frequencyResponseIdentification:missingSampleTime', ...
+        'Variable ''ts'' not found. Run frequency_response_initialization first.');
+end
+
+if ~isfield(simout, 'time') || ~isfield(simout, 'signals') || ...
+        ~isfield(simout.signals, 'values')
+    error('frequencyResponseIdentification:malformedMeasurement', ...
+        'simout must be a structure with ''time'' and ''signals.values'' fields.');
+end
+
+if size(simout.signals.values, 2) < 2
+    error('frequencyResponseIdentification:missingChannel', ...
+        ['simout must contain at least two logged channels (input voltage and output ', ...
+         'angle), found %d.'], size(simout.signals.values, 2));
+end
+
 %% Extract data
 t = simout.time;
 u = simout.signals.values(:,1);   % input voltage [V]
@@ -15,9 +39,17 @@ y = y(2:end);
 %% Select signal type
 % inputType = 0 -> multisine
 % inputType = 1 -> chirp
+% Guessing the excitation type silently mislabels the whole identification,
+% so require it explicitly.
 if ~exist('inputType','var')
-    warning('inputType not found. Assuming multisine.');
-    inputType = 0;
+    error('frequencyResponseIdentification:missingInputType', ...
+        ['Variable ''inputType'' not found. Run frequency_response_initialization ', ...
+         'to set it (0 = multisine, 1 = chirp).']);
+end
+
+if inputType == 0 && ~exist('T','var')
+    error('frequencyResponseIdentification:missingPeriodTime', ...
+        'Multisine processing needs the period time ''T'' from frequency_response_initialization.');
 end
 
 %% Basic frequency settings
@@ -39,7 +71,9 @@ if inputType == 0
     Nr = floor(length(u)/N);       % number of complete periods
 
     if Nr < 1
-        error('Not enough data for one full period. Increase simulation time Ttot.');
+        error('frequencyResponseIdentification:tooFewPeriods', ...
+            ['Not enough data for one full period (%d samples for a period of %d ', ...
+             'samples). Increase simulation time Ttot.'], length(u), N);
     end
 
     % Keep only complete periods at the end of the measurement
@@ -102,6 +136,12 @@ yf_pos = yf(validPos);
 threshold = inputThresholdRaw * max(abs(uf_pos));
 ind = abs(uf_pos) > threshold;
 
+if ~any(ind)
+    error('frequencyResponseIdentification:noExcitedFrequencies', ...
+        ['No frequency bin exceeds %.3f of the peak input spectrum; the excitation ', ...
+         'signal appears to be missing from the measurement.'], inputThresholdRaw);
+end
+
 f_meas = fgrid_pos(ind);
 Hm = -yf_pos(ind) ./ uf_pos(ind);   % measured FRF: angle / voltage
 
@@ -120,6 +160,15 @@ if inputType == 1
     % Remove any leftover points that do not fit into complete blocks
     nBlocks = floor(length(f_for_avg)/averageBlockSize);
     nUse = nBlocks * averageBlockSize;
+
+    % Without this check the block averaging below silently returns an empty
+    % FRF, which is then saved and plotted as if it were a measurement.
+    if nBlocks < 1
+        error('frequencyResponseIdentification:tooFewPointsForAveraging', ...
+            ['Only %d usable FRF points in [%.2f, %.2f] Hz, which is fewer than the ', ...
+             'averaging block size of %d. Reduce averageBlockSize or widen the band.'], ...
+            length(f_for_avg), fMinUseful, fMaxUseful, averageBlockSize);
+    end
 
     f_for_avg = f_for_avg(1:nUse);
     Hm_for_avg = Hm_for_avg(1:nUse);
@@ -148,6 +197,12 @@ end
 Hm_real_s = smoothdata(real(Hm_smooth(:)), 'movmedian', 3);
 Hm_imag_s = smoothdata(imag(Hm_smooth(:)), 'movmedian', 3);
 Hm_smooth = Hm_real_s + 1i*Hm_imag_s;
+
+if isempty(Hm_smooth)
+    error('frequencyResponseIdentification:emptySmoothedResponse', ...
+        ['Smoothed FRF is empty; no measured points fall inside the useful band ', ...
+         '[%.2f, %.2f] Hz.'], fMinUseful, fMaxUseful);
+end
 
 %% Smoothed FRD object
 Hm_frd_smooth = frd(Hm_smooth, 2*pi*f_smooth, ts);
@@ -194,9 +249,14 @@ grid on
 title('Measured frequency response: angle / voltage');
 
 %% Optional: overlay model if available
-He = spacar_sim_out.plant_voltage_to_sensor_em;
+if exist('spacar_sim_out','var') && isstruct(spacar_sim_out) && ...
+        isfield(spacar_sim_out,'plant_voltage_to_sensor_em')
+    He = spacar_sim_out.plant_voltage_to_sensor_em;
+else
+    He = [];
+end
 
-if exist('He','var') && ~isempty(He)
+if ~isempty(He)
     hold on
     bodeplot(He,opts);
     legend('Measured FRF','Model');

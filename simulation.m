@@ -108,6 +108,20 @@ spacarOptions.customvis = {'modeshape','maximum 20'};
 
 spacarOutput = spacarlight(nodes_m, elements, nodeProperties, elementProperties, spacarOptions);
 
+% spacarlight returns a partially filled struct when an analysis step does not
+% complete, so check what came back before using it.
+if ~isstruct(spacarOutput) || ~isfield(spacarOutput, 'statespace') || isempty(spacarOutput.statespace)
+    error('simulation:noStateSpace', ...
+        ['SPACAR returned no state-space model. Check spacar_file.log and that ', ...
+         'opt.transfer is enabled with valid transfer inputs/outputs.']);
+end
+
+if ~isfield(spacarOutput, 'step') || isempty(spacarOutput.step) || ...
+        ~isfield(spacarOutput.step(end), 'freq') || isempty(spacarOutput.step(end).freq)
+    error('simulation:noEigenFrequencies', ...
+        'SPACAR returned no eigenfrequencies; the model reduction split frequency cannot be set.');
+end
+
 eigenFreq_Hz = spacarOutput.step(end).freq;
 plant_force_to_outputs_mech = spacarOutput.statespace;
 
@@ -178,7 +192,8 @@ controller_nominal = build_pid_lead(nominal_sizing.J_kgm2 / voltageToTorqueGain,
 
 openLoop_nominal = controller_nominal * plant_voltage_to_angle_nominal;
 
-margins_nominal = loop_margins(openLoop_nominal);
+margins_nominal = check_margins('nominal plant + nominal controller', ...
+    loop_margins(openLoop_nominal));
 
 
 %% SPACAR Model without actuator dynamics (force to sensor displacement)
@@ -186,14 +201,16 @@ plant_force_to_sensor_mech = -tf(plant_force_to_outputs_mech(sensorDisplacementO
 
 openLoop_spacarMechanical = controller_nominal * plant_force_to_sensor_mech;
 
-margins_spacarMechanical = loop_margins(openLoop_spacarMechanical);
+margins_spacarMechanical = check_margins('SPACAR mechanical + nominal controller', ...
+    loop_margins(openLoop_spacarMechanical));
 
 
 %% SPACAR Model with actuator dynamics (Back EMF) (voltage to sensor displacement) 
 openLoop_electromechanical_nominalController = ...
     controller_nominal * plant_voltage_to_sensor_em;
 
-margins_electromechanical = loop_margins(openLoop_electromechanical_nominalController);
+margins_electromechanical = check_margins('electromechanical + nominal controller', ...
+    loop_margins(openLoop_electromechanical_nominalController));
 
 %% Retuned controller
 targetCrossover_rad_s = p.ctrl.wc_rads;
@@ -218,13 +235,19 @@ end
 openLoop_retuned = controller_retunedPID * plant_voltage_to_sensor_em;
 closedLoop_retuned = feedback(openLoop_retuned, 1);
 
-margins_retuned = loop_margins(openLoop_retuned);
+margins_retuned = check_margins('electromechanical + retuned controller', ...
+    loop_margins(openLoop_retuned));
 
 %% Check for stability using poles 
-if all(real(pole(closedLoop_retuned)) < 0)
+isClosedLoopStable_retuned = all(real(pole(closedLoop_retuned)) < 0);
+
+if isClosedLoopStable_retuned
     fprintf('  Closed-loop Stable\n');
 else
-    fprintf('  Closed-loop Unstable\n');
+    warning('simulation:closedLoopUnstable', ...
+        ['Retuned closed loop is unstable: %d of %d poles have non-negative real ', ...
+         'part. Downstream discretisation results are not valid.'], ...
+        sum(real(pole(closedLoop_retuned)) >= 0), numel(pole(closedLoop_retuned)));
 end
 
 %% Summary table
@@ -314,5 +337,6 @@ simulation.PM_em = margins_electromechanical.PM_deg;
 simulation.GM_nom_dB = margins_nominal.GM_dB;
 simulation.GM_mech_dB = margins_spacarMechanical.GM_dB;
 simulation.GM_em_dB = margins_electromechanical.GM_dB;
+simulation.isClosedLoopStable_retuned = isClosedLoopStable_retuned;
 
 end

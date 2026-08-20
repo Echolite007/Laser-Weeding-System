@@ -23,7 +23,32 @@ w1   = delB.wn_rad_s;
 %% --- alpha from phase margin (EQ 12.9) 
 alpha = alpha_from_phase_lead(45 - PM_deg);
 
+% alpha outside (0,1) turns the intended lead filter into a lag filter, which
+% would otherwise propagate as a plausible-looking but wrong controller.
+if ~isfinite(alpha) || alpha <= 0 || alpha >= 1
+    error('controllerDesign:invalidAlpha', ...
+        ['alpha = %g is outside (0,1) for PM = %.2f deg (from delB.zeta = %g); ', ...
+         'no lead filter exists for this phase margin.'], alpha, PM_deg, delB.zeta);
+end
+
+if ~isfinite(emax) || emax <= 0
+    error('controllerDesign:invalidSpec', ...
+        'p.spec.angular_accuracy_rad must be a finite positive value, got %g.', emax);
+end
+
+if ~all(isfinite([J, k_eq, d, zeta, w1]))
+    error('controllerDesign:invalidPlant', ...
+        ['Plant parameters from the sizing step contain non-finite values ', ...
+         '(J=%g, k_eq=%g, d=%g, zeta=%g, w1=%g).'], J, k_eq, d, zeta, w1);
+end
+
 % Reference quantities 
+if ~isfinite(ref_nom.a2p) || ref_nom.a2p == 0
+    error('controllerDesign:invalidReference', ...
+        'ref.a2p must be finite and non-zero to convert driving speed to angular speed, got %g.', ...
+        ref_nom.a2p);
+end
+
 v_weeding = p.spec.driving_speed_nom_mps / ref_nom.a2p;
 
 dtheta_max   = ref_nom.dtheta_max;    
@@ -42,6 +67,12 @@ kvA = w1^2 * kjA;
 rhs_B = (1 - g1) * dddtheta_max + (1 - g2) * 2 * zeta * w1 * ddtheta_max + (1 - g3) * w1^2 * dtheta_max;
 wcB3  = beta * rhs_B / (alpha * emax);
 wcB   = wcB3^(1/3);
+
+if ~isfinite(wcA) || wcA <= 0 || ~isfinite(wcB) || wcB <= 0
+    error('controllerDesign:invalidCrossover', ...
+        ['Required crossover frequencies are not usable (wcA = %g rad/s, ', ...
+         'wcB = %g rad/s); check the reference derivatives and error spec.'], wcA, wcB);
+end
 
 kjB = beta / (alpha * wcB^3);
 kaB = 2 * zeta * w1 * kjB;
@@ -73,6 +104,21 @@ maxAbsErrA = max(abs(e_A));
 maxAbsErrB = max(abs(e_B));
 specOkA = maxAbsErrA <= emax;
 specOkB = maxAbsErrB <= emax;
+
+%% Report spec violations instead of only recording them in the output struct
+if ~specOkA
+    warning('controllerDesign:specViolatedApproachA', ...
+        ['Approach A exceeds the tracking-error spec over the full reference: ', ...
+         'max|e| = %.4f mrad vs %.4f mrad. Approach A only enforces the spec during ', ...
+         'the weeding phase, so the fast return transient is not covered.'], ...
+        maxAbsErrA*1e3, emax*1e3);
+end
+
+if ~specOkB
+    warning('controllerDesign:specViolatedApproachB', ...
+        ['Approach B exceeds the tracking-error spec over the full reference: ', ...
+         'max|e| = %.4f mrad vs %.4f mrad.'], maxAbsErrB*1e3, emax*1e3);
+end
 
 % fprintf('--- Deliverable d: controller design (PM=%.0f deg) ---\n', PM_deg);
 % fprintf('alpha = %.4f, beta = %.1f, zeta = %.6g (from delB, d=%.6g N*m*s/rad, NOT zero), w1 = %.4f rad/s\n', ...
