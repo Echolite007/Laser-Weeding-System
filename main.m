@@ -1,7 +1,8 @@
 clear; clc; close all 
 
 % SPACAR Path 
-spacarRoot = fullfile(fileparts(mfilename('fullpath')), 'spacar');
+projectRoot = fileparts(mfilename('fullpath'));
+spacarRoot = fullfile(projectRoot, 'spacar');
 spacarLight = fullfile(spacarRoot, 'spalight-1.38');
 
 for pathToAdd = {spacarRoot, spacarLight}
@@ -16,6 +17,16 @@ if isempty(which('spacarlight'))
     error('laserWeeding:missingSpacar', ...
         'spacarlight is not on the MATLAB path after adding %s.', spacarLight);
 end
+
+% Shared helper functions 
+utilsRoot = fullfile(projectRoot, 'utils');
+
+if ~isfolder(utilsRoot)
+    error('laserWeeding:missingUtils', ...
+        'Required helper directory not found: %s', utilsRoot);
+end
+
+addpath(utilsRoot);
 
 % Load parameters 
 params = parameters(); 
@@ -36,8 +47,7 @@ params.mech.d_Nms_per_rad = nominal_sizing.d_Nms_per_rad;
 s_var = tf('s');
 
 % Nominal Continuous plant: Voltage to Mirror Angle 
-P_nom = (params.mech.r_arm_m * params.actuator.Kf_N_per_A / params.actuator.R25_ohm) / ...
-    (params.mech.J_kgm2 * s_var^2 + params.mech.d_Nms_per_rad * s_var + params.mech.k_Nm_per_rad);
+P_nom = nominal_plant_tf(params.mech, params.actuator, s_var);
 
 % Controller design 
 controller = controller_design(params, nominal_sizing, ref);
@@ -52,20 +62,7 @@ discretized_system = discretisation(params, controller, spacar_sim_out);
 ts = 5e-4;
 r_sensor = 0.052;
 
-[num_a, den_a] = tfdata(spacar_sim_out.plant_voltage_to_sensor_reduced, 'v');
-
-if numel(den_a) < 3
-    error('laserWeeding:plantOrder', ...
-        ['Reduced plant has denominator order %d; at least a second-order model is ', ...
-         'required to extract J_eq, d_eq and k_eq.'], numel(den_a) - 1);
-end
-
-if ~isfinite(num_a(end)) || num_a(end) == 0
-    error('laserWeeding:plantGain', ...
-        ['Reduced plant has a zero or non-finite DC numerator coefficient (%g); ', ...
-         'the equivalent inertia, damping and stiffness cannot be derived.'], num_a(end));
-end
-
-J_eq = abs(den_a(end-2) / num_a(end));    % s^2 coeff -- rotary inertia [kg*m^2]
-d_eq = abs(den_a(end-1) / num_a(end));    % s^1 coeff -- rotary damping [N*m*s/rad]
-k_eq = abs(den_a(end)   / num_a(end));
+equivalent = second_order_params(spacar_sim_out.plant_voltage_to_sensor_reduced);
+J_eq = equivalent.m_eq;   % s^2 coeff -- rotary inertia [kg*m^2]
+d_eq = equivalent.d_eq;   % s^1 coeff -- rotary damping [N*m*s/rad]
+k_eq = equivalent.k_eq;

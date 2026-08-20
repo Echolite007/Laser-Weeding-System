@@ -21,7 +21,7 @@ zeta = delB.zeta;
 w1   = delB.wn_rad_s;        
 
 %% --- alpha from phase margin (EQ 12.9) 
-alpha = (1 - sind(45 - PM_deg)) / (1 + sind(45 - PM_deg));
+alpha = alpha_from_phase_lead(45 - PM_deg);
 
 % alpha outside (0,1) turns the intended lead filter into a lag filter, which
 % would otherwise propagate as a plausible-looking but wrong controller.
@@ -157,8 +157,4 @@ controller.B = struct('wc_rad_s', wcB, 'kj', kjB, 'ka', kaB, 'kv', kvB, ...
 controller.t = t;
 controller.recommended = 'B';   
 
-end
-
-function s = ternary(cond, a, b)
-if cond; s = a; else; s = b; end
 end

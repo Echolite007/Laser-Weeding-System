@@ -126,13 +126,10 @@ eigenFreq_Hz = spacarOutput.step(end).freq;
 plant_force_to_outputs_mech = spacarOutput.statespace;
 
 %% Mechanical Bode diagram: actuator force to sensor displacement
-opts = bodeoptions;
-opts.PhaseWrapping = 'off';
+opts = bode_options();
 figure('Name','Deliverable g: Force to Sensor Displacement Frequency Response');
 bodeplot(-plant_force_to_outputs_mech(sensorDisplacementOutputIndex,1));
-title('Deliverable g - Mechanical plant: Force to Sensor Displacement Frequency Response');
-grid on;
-set(findall(gcf,'Type','line'),'LineWidth',1.3);
+style_plot('Deliverable g - Mechanical plant: Force to Sensor Displacement Frequency Response');
 
 %% Add actuator dynamics (Voltage to sensor displacement) 
 coilInductance_H = p.actuator.Lcoil_H;
@@ -152,9 +149,7 @@ plant_voltage_to_sensor_em = -tf(plant_voltage_to_sensor_em);
 figure('Name','Deliverable h: Plant with/without actuator dynamics');
 bodeplot(-tf(plant_force_to_outputs_mech(sensorDisplacementOutputIndex,1)), plant_voltage_to_sensor_em);
 legend('Without actuator dynamics','With actuator dynamics');
-title('Deliverable h - Voltage/Force -> sensor displacement');
-grid on;
-set(findall(gcf,'Type','line'),'LineWidth',1.3);
+style_plot('Deliverable h - Voltage/Force -> sensor displacement');
 
 %% Model reduction 
 reductionSplitFreq_rad_s = eigenFreq_Hz(1)*40*2*pi;
@@ -166,33 +161,14 @@ plant_voltage_to_sensor_reduced = tf(plant_voltage_to_sensor_reduced); % Transfe
 figure('Name','Deliverable h: Model reduction via freqsep');
 bode(plant_voltage_to_sensor_em, plant_voltage_to_sensor_reduced);
 legend('Full electromechanical plant','2nd-order approximation (freqsep)');
-title('Deliverable h - Model reduction via freqsep');
-grid on;
-set(findall(gcf,'Type','line'),'LineWidth',1.3);
+style_plot('Deliverable h - Model reduction via freqsep');
 
 %% Extract equivalent second-order parameters (m_eq, w_n, zeta) 
-% Extract numerator and denominator coefficient vectors.
-[reducedNumerator, reducedDenominator] = tfdata(plant_voltage_to_sensor_reduced, 'v'); 
+reducedEquivalent = second_order_params(plant_voltage_to_sensor_reduced);
 
-% The second-order fit below indexes three denominator coefficients and divides
-% by the numerator DC gain; both assumptions can silently produce Inf/NaN.
-if numel(reducedDenominator) < 3
-    error('simulation:reductionOrder', ...
-        ['Model reduction returned a denominator of order %d; freqsep did not keep a ', ...
-         'second-order slow subsystem (split frequency %.1f rad/s).'], ...
-        numel(reducedDenominator) - 1, reductionSplitFreq_rad_s);
-end
-
-if ~isfinite(reducedNumerator(end)) || reducedNumerator(end) == 0
-    error('simulation:reductionGain', ...
-        'Reduced plant DC numerator coefficient is %g; m_eq cannot be derived.', ...
-        reducedNumerator(end));
-end
-
-% Get parameters using standard second order transfer function form 
-m_eq = abs(reducedDenominator(end-2)/reducedNumerator(end));
-w_n = sqrt(reducedDenominator(end));
-zeta = reducedDenominator(end-1)/(2*w_n);
+m_eq = reducedEquivalent.m_eq;
+w_n = reducedEquivalent.wn_rad_s;
+zeta = reducedEquivalent.zeta;
 
 % fprintf('\n=== SPACAR 2nd-order fit ===\n');
 % fprintf('  wn   = %.2f rad/s (%.2f Hz)\n', ...
@@ -204,26 +180,20 @@ zeta = reducedDenominator(end-1)/(2*w_n);
 s = tf('s');
 
 %% Nominal plant (Voltage to Angle)
-plant_voltage_to_angle_nominal = (nominal_sizing.r_arm_m*km/p.actuator.R25_ohm) / ...
-    (nominal_sizing.J_kgm2*s^2 + nominal_sizing.d_Nms_per_rad*s + nominal_sizing.k_Nm_per_rad);
+[plant_voltage_to_angle_nominal, voltageToTorqueGain] = ...
+    nominal_plant_tf(nominal_sizing, p.actuator, s);
 
 nominalCrossover_rad_s = controller.B.wc_rad_s;
 nominalAlpha = controller.alpha;
 beta = controller.beta;
 
-controller_nominal = build_pid(nominal_sizing.J_kgm2 / ...
-    (nominal_sizing.r_arm_m*km/p.actuator.R25_ohm), nominalCrossover_rad_s, nominalAlpha, beta, s);
+controller_nominal = build_pid_lead(nominal_sizing.J_kgm2 / voltageToTorqueGain, ...
+    nominalCrossover_rad_s, nominalAlpha, beta, s);
 
 openLoop_nominal = controller_nominal * plant_voltage_to_angle_nominal;
 
-
-% phaseCrossFreq_nominal_rad_s can also be retrieved instead of ~
-[gainMargin_nominal_abs, phaseMargin_nominal_deg, ~ , gainCrossFreq_nominal_rad_s] = ...
-    margin(openLoop_nominal);
-
-[gainMargin_nominal_abs, phaseMargin_nominal_deg, gainCrossFreq_nominal_rad_s] = ...
-    checkMargins('nominal plant + nominal controller', ...
-    gainMargin_nominal_abs, phaseMargin_nominal_deg, gainCrossFreq_nominal_rad_s);
+margins_nominal = check_margins('nominal plant + nominal controller', ...
+    loop_margins(openLoop_nominal));
 
 
 %% SPACAR Model without actuator dynamics (force to sensor displacement)
@@ -231,33 +201,16 @@ plant_force_to_sensor_mech = -tf(plant_force_to_outputs_mech(sensorDisplacementO
 
 openLoop_spacarMechanical = controller_nominal * plant_force_to_sensor_mech;
 
-
-% phaseCrossFreq_spacarMechanical_rad_s can be retrieved instead of ~
-[gainMargin_spacarMechanical_abs, phaseMargin_spacarMechanical_deg, ...
-    ~, gainCrossFreq_spacarMechanical_rad_s] = ...
-    margin(openLoop_spacarMechanical);
-
-[gainMargin_spacarMechanical_abs, phaseMargin_spacarMechanical_deg, ...
-    gainCrossFreq_spacarMechanical_rad_s] = ...
-    checkMargins('SPACAR mechanical + nominal controller', ...
-    gainMargin_spacarMechanical_abs, phaseMargin_spacarMechanical_deg, ...
-    gainCrossFreq_spacarMechanical_rad_s);
+margins_spacarMechanical = check_margins('SPACAR mechanical + nominal controller', ...
+    loop_margins(openLoop_spacarMechanical));
 
 
 %% SPACAR Model with actuator dynamics (Back EMF) (voltage to sensor displacement) 
 openLoop_electromechanical_nominalController = ...
     controller_nominal * plant_voltage_to_sensor_em;
 
-% phaseCrossFreq_electromechanical_rad_s can be retrieved instead of ~
-[gainMargin_electromechanical_abs, phaseMargin_electromechanical_deg, ...
-    ~, gainCrossFreq_electromechanical_rad_s] = ...
-    margin(openLoop_electromechanical_nominalController);
-
-[gainMargin_electromechanical_abs, phaseMargin_electromechanical_deg, ...
-    gainCrossFreq_electromechanical_rad_s] = ...
-    checkMargins('electromechanical + nominal controller', ...
-    gainMargin_electromechanical_abs, phaseMargin_electromechanical_deg, ...
-    gainCrossFreq_electromechanical_rad_s);
+margins_electromechanical = check_margins('electromechanical + nominal controller', ...
+    loop_margins(openLoop_electromechanical_nominalController));
 
 %% Retuned controller
 targetCrossover_rad_s = p.ctrl.wc_rads;
@@ -271,14 +224,10 @@ requiredLeadPhase_deg = 45 - (180 + plantPhaseAtTarget_deg);
 if requiredLeadPhase_deg <= 0
     retunedAlpha = controller.alpha;
 else
-    retunedAlpha = ...
-        (1 - sind(requiredLeadPhase_deg)) / ...
-        (1 + sind(requiredLeadPhase_deg));
-
-    retunedAlpha = max(0.001, min(0.999, retunedAlpha));
+    retunedAlpha = alpha_from_phase_lead(requiredLeadPhase_deg, [0.001 0.999]);
 end
 
-controller_retunedPID = build_pid( ...
+[controller_retunedPID, retunedGains] = build_pid_lead( ...
     m_eq, targetCrossover_rad_s, retunedAlpha, beta, s);
 
 
@@ -286,16 +235,8 @@ controller_retunedPID = build_pid( ...
 openLoop_retuned = controller_retunedPID * plant_voltage_to_sensor_em;
 closedLoop_retuned = feedback(openLoop_retuned, 1);
 
-% phaseCrossFreq_retuned_rad_s instead of ~
-[gainMargin_retuned_abs, phaseMargin_retuned_deg, ...
-    ~, gainCrossFreq_retuned_rad_s] = ...
-    margin(openLoop_retuned);
-
-[gainMargin_retuned_abs, phaseMargin_retuned_deg, gainCrossFreq_retuned_rad_s] = ...
-    checkMargins('electromechanical + retuned controller', ...
-    gainMargin_retuned_abs, phaseMargin_retuned_deg, gainCrossFreq_retuned_rad_s);
-
-gainMargin_retuned_dB = 20*log10(gainMargin_retuned_abs);
+margins_retuned = check_margins('electromechanical + retuned controller', ...
+    loop_margins(openLoop_retuned));
 
 %% Check for stability using poles 
 isClosedLoopStable_retuned = all(real(pole(closedLoop_retuned)) < 0);
@@ -310,33 +251,15 @@ else
 end
 
 %% Summary table
-fprintf('\n--- Summary table ---\n');
-fprintf('%-55s  %8s  %8s  %8s\n', ...
-    'Configuration','wc(rad/s)','PM(deg)','GM(dB)');
-
-fprintf('%-55s  %8.1f  %8.1f  %8.1f\n', ...
+print_margin_table('--- Summary table ---', 55, { ...
     'Nominal plant + nominal controller', ...
-    gainCrossFreq_nominal_rad_s, ...
-    phaseMargin_nominal_deg, ...
-    20*log10(gainMargin_nominal_abs));
-
-fprintf('%-55s  %8.1f  %8.1f  %8.1f\n', ...
+        margins_nominal.wcp_rad_s, margins_nominal.PM_deg, margins_nominal.GM_dB; ...
     'SPACAR mechanical + nominal controller', ...
-    gainCrossFreq_spacarMechanical_rad_s, ...
-    phaseMargin_spacarMechanical_deg, ...
-    20*log10(gainMargin_spacarMechanical_abs));
-
-fprintf('%-55s  %8.1f  %8.1f  %8.1f\n', ...
+        margins_spacarMechanical.wcp_rad_s, margins_spacarMechanical.PM_deg, margins_spacarMechanical.GM_dB; ...
     'Electromechanical + nominal controller', ...
-    gainCrossFreq_electromechanical_rad_s, ...
-    phaseMargin_electromechanical_deg, ...
-    20*log10(gainMargin_electromechanical_abs));
-
-fprintf('%-55s  %8.1f  %8.1f  %8.1f\n', ...
+        margins_electromechanical.wcp_rad_s, margins_electromechanical.PM_deg, margins_electromechanical.GM_dB; ...
     'Electromechanical + retuned controller', ...
-    gainCrossFreq_retuned_rad_s, ...
-    phaseMargin_retuned_deg, ...
-    gainMargin_retuned_dB);
+        margins_retuned.wcp_rad_s, margins_retuned.PM_deg, margins_retuned.GM_dB});
 
 %% Open-loop comparison plot
 figure('Name','Deliverable i: Open-loop Bode - before and after');
@@ -353,29 +276,22 @@ legend( ...
     'Electromechanical + C_{retuned}', ...
     'Location','southwest');
 
-title('Deliverable i - Effect of parasitic and actuator dynamics on open-loop margins');
-grid on;
-set(findall(gcf,'Type','line'),'LineWidth',1.3);
+style_plot('Deliverable i - Effect of parasitic and actuator dynamics on open-loop margins');
 
 %% Retuned open-loop margin plot
 figure('Name','Deliverable i: Retuned open-loop Bode with margins');
 margin(openLoop_retuned);
-title('Deliverable i - Retuned open-loop: C_{PID} P_{em}');
-grid on;
-set(findall(gcf,'Type','line'),'LineWidth',1.3);
+style_plot('Deliverable i - Retuned open-loop: C_{PID} P_{em}');
 
 %% Print retuned PID parameters
 fprintf('\n=== Retuned PID parameters ===\n');
 fprintf('  alpha  = %.4f\n', retunedAlpha);
 fprintf('  beta   = %.1f\n', beta);
 
-retunedtau_z = sqrt(1/retunedAlpha)/targetCrossover_rad_s;
-retunedtau_i = beta*retunedtau_z;
-retunedPoleTimeConstant_s = ...
-    1/(targetCrossover_rad_s*sqrt(1/retunedAlpha));
-
-retunedProportionalGain = ...
-    m_eq*targetCrossover_rad_s^2/sqrt(1/retunedAlpha);
+retunedtau_z = retunedGains.tau_z;
+retunedtau_i = retunedGains.tau_i;
+retunedPoleTimeConstant_s = retunedGains.tau_p;
+retunedProportionalGain = retunedGains.kp;
 
 fprintf('  kp     = %.4g\n', retunedProportionalGain);
 fprintf('  tau_z  = %.4g s  (zero at %.1f rad/s)\n', ...
@@ -407,58 +323,20 @@ simulation.openLoop_electromechanical_nominalController = ...
 simulation.openLoop_retuned = openLoop_retuned;
 simulation.closedLoop_retuned = closedLoop_retuned;
 
-simulation.wc_rad_s = gainCrossFreq_retuned_rad_s;
+simulation.wc_rad_s = margins_retuned.wcp_rad_s;
 simulation.wc_target = targetCrossover_rad_s;
-simulation.PM_deg = phaseMargin_retuned_deg;
-simulation.GM_dB = gainMargin_retuned_dB;
+simulation.PM_deg = margins_retuned.PM_deg;
+simulation.GM_dB = margins_retuned.GM_dB;
 simulation.alpha = retunedAlpha;
 simulation.beta = beta;
 
-simulation.PM_nom = phaseMargin_nominal_deg;
-simulation.PM_mech = phaseMargin_spacarMechanical_deg;
-simulation.PM_em = phaseMargin_electromechanical_deg;
+simulation.PM_nom = margins_nominal.PM_deg;
+simulation.PM_mech = margins_spacarMechanical.PM_deg;
+simulation.PM_em = margins_electromechanical.PM_deg;
 
-simulation.GM_nom_dB = 20*log10(gainMargin_nominal_abs);
-simulation.GM_mech_dB = 20*log10(gainMargin_spacarMechanical_abs);
-simulation.GM_em_dB = 20*log10(gainMargin_electromechanical_abs);
+simulation.GM_nom_dB = margins_nominal.GM_dB;
+simulation.GM_mech_dB = margins_spacarMechanical.GM_dB;
+simulation.GM_em_dB = margins_electromechanical.GM_dB;
 simulation.isClosedLoopStable_retuned = isClosedLoopStable_retuned;
-
-end
-
-function [gainMargin_abs, phaseMargin_deg, gainCrossFreq_rad_s] = ...
-    checkMargins(label, gainMargin_abs, phaseMargin_deg, gainCrossFreq_rad_s)
-% margin() returns empty or NaN when no crossover exists. Without this check
-% those values print as NaN in the summary table and are packed into the
-% output struct as if they were valid margins.
-if isempty(gainMargin_abs);     gainMargin_abs = NaN;     end
-if isempty(phaseMargin_deg);    phaseMargin_deg = NaN;    end
-if isempty(gainCrossFreq_rad_s); gainCrossFreq_rad_s = NaN; end
-
-if ~isfinite(phaseMargin_deg) || ~isfinite(gainCrossFreq_rad_s)
-    warning('simulation:noCrossover', ...
-        ['No valid gain crossover found for %s (PM = %g deg, wc = %g rad/s); ', ...
-         'the reported margins for this configuration are meaningless.'], ...
-        label, phaseMargin_deg, gainCrossFreq_rad_s);
-elseif phaseMargin_deg <= 0
-    warning('simulation:nonPositivePhaseMargin', ...
-        'Phase margin for %s is %.2f deg, i.e. the open loop is not stable.', ...
-        label, phaseMargin_deg);
-end
-end
-
-function controller_tf = build_pid(m_eq, wc_rad_s, alpha, beta, s)
-% PID controller with lead filter:
-% C(s) = kp*(tau_z*s + 1)*(tau_i*s + 1) / ((tau_p*s + 1)*tau_i*s)
-
-tau_z = sqrt(1/alpha)/wc_rad_s;
-tau_i = beta*tau_z;
-poleTimeConstant_s = 1/(wc_rad_s*sqrt(1/alpha));
-
-proportionalGain = m_eq*wc_rad_s^2/sqrt(1/alpha);
-
-controller_tf = proportionalGain * ...
-    (tau_z*s + 1) * ...
-    (tau_i*s + 1) / ...
-    ((poleTimeConstant_s*s + 1)*tau_i*s);
 
 end

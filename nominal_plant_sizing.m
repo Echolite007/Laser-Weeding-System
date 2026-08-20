@@ -17,12 +17,12 @@ ddtheta_max = ref.ddtheta_max;
 
 % Sizing divides by these quantities: reject NaN/zero inputs (e.g. the NaN
 % placeholders in parameters.m) instead of returning Inf/NaN sizes silently.
-checkPositiveFinite('params.actuator.R25_ohm', R);
-checkPositiveFinite('params.actuator.Kf_N_per_A', km);
-checkPositiveFinite('params.actuator.Umax_V', Umax);
-checkPositiveFinite('ref.theta_max', theta_max);
-checkPositiveFinite('ref.dtheta_max', dtheta_max);
-checkPositiveFinite('ref.ddtheta_max', ddtheta_max);
+check_positive_finite('params.actuator.R25_ohm', R);
+check_positive_finite('params.actuator.Kf_N_per_A', km);
+check_positive_finite('params.actuator.Umax_V', Umax);
+check_positive_finite('ref.theta_max', theta_max);
+check_positive_finite('ref.dtheta_max', dtheta_max);
+check_positive_finite('ref.ddtheta_max', ddtheta_max);
 
 %% 1) r_arm from the velocity-driven (back-EMF) voltage budget
 r_arm_nominal = margin * Umax / (km * dtheta_max);
@@ -122,12 +122,4 @@ end
 % 
 % end
 
-function s = ternary(cond, a, b)
-if cond; s = a; else; s = b; end
-
-function checkPositiveFinite(name, value)
-if ~isscalar(value) || ~isfinite(value) || value <= 0
-    error('nominalPlantSizing:invalidInput', ...
-        '%s must be a finite positive scalar, got %s.', name, mat2str(value));
-end
 

@@ -1,5 +1,7 @@
 close all; clc;
 
+addpath('utils');
+
 %% Required workspace data
 if ~exist('simout','var')
     error('frequencyResponseIdentification:missingMeasurement', ...
@@ -215,9 +217,7 @@ save('Hm_frd_deliverable_P_smooth.mat', ...
 
 %% Plot raw and smoothed Bode
 figure;
-opts = bodeoptions;
-opts.FreqUnits = 'Hz';
-opts.PhaseWrapping = 'on';
+opts = bode_options('FreqUnits', 'Hz', 'PhaseWrapping', 'on');
 
 bodeplot(Hm_frd, Hm_frd_smooth, opts);
 grid on;
@@ -242,10 +242,7 @@ title('FFT of measured angle');
 
 %% Bode plot of measured frequency response
 figure;
-opts = bodeoptions;
-opts.FreqUnits = 'Hz';
-opts.XLim = [min(f_meas) max(f_meas)];
-opts.PhaseWrapping = 'off';
+opts = bode_options('FreqUnits', 'Hz', 'XLim', [min(f_meas) max(f_meas)]);
 
 bodeplot(Hm_frd_smooth,'r.',opts);
 grid on
