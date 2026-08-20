@@ -1,0 +1,25 @@
+# MATLAB / Simulink generated files
+*.asv
+*.autosave
+*.slx.autosave
+*.slxc
+*.m~
+slprj/
+sccprj/
+codegen/
+
+# Embedded Coder / Simulink Coder build output
+*_ert_rtw/
+*_grt_rtw/
+*.dwo
+*.hex
+*.out
+*.obj
+*.map
+*.dep
+
+# SPACAR run artifacts
+spacar_file.log
+spacar_file.ltv
+spacar_file.sbd
+spacar_file.sbm
