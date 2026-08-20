@@ -108,6 +108,20 @@ spacarOptions.customvis = {'modeshape','maximum 20'};
 
 spacarOutput = spacarlight(nodes_m, elements, nodeProperties, elementProperties, spacarOptions);
 
+% spacarlight returns a partially filled struct when an analysis step does not
+% complete, so check what came back before using it.
+if ~isstruct(spacarOutput) || ~isfield(spacarOutput, 'statespace') || isempty(spacarOutput.statespace)
+    error('simulation:noStateSpace', ...
+        ['SPACAR returned no state-space model. Check spacar_file.log and that ', ...
+         'opt.transfer is enabled with valid transfer inputs/outputs.']);
+end
+
+if ~isfield(spacarOutput, 'step') || isempty(spacarOutput.step) || ...
+        ~isfield(spacarOutput.step(end), 'freq') || isempty(spacarOutput.step(end).freq)
+    error('simulation:noEigenFrequencies', ...
+        'SPACAR returned no eigenfrequencies; the model reduction split frequency cannot be set.');
+end
+
 eigenFreq_Hz = spacarOutput.step(end).freq;
 plant_force_to_outputs_mech = spacarOutput.statespace;
 
@@ -160,6 +174,21 @@ set(findall(gcf,'Type','line'),'LineWidth',1.3);
 % Extract numerator and denominator coefficient vectors.
 [reducedNumerator, reducedDenominator] = tfdata(plant_voltage_to_sensor_reduced, 'v'); 
 
+% The second-order fit below indexes three denominator coefficients and divides
+% by the numerator DC gain; both assumptions can silently produce Inf/NaN.
+if numel(reducedDenominator) < 3
+    error('simulation:reductionOrder', ...
+        ['Model reduction returned a denominator of order %d; freqsep did not keep a ', ...
+         'second-order slow subsystem (split frequency %.1f rad/s).'], ...
+        numel(reducedDenominator) - 1, reductionSplitFreq_rad_s);
+end
+
+if ~isfinite(reducedNumerator(end)) || reducedNumerator(end) == 0
+    error('simulation:reductionGain', ...
+        'Reduced plant DC numerator coefficient is %g; m_eq cannot be derived.', ...
+        reducedNumerator(end));
+end
+
 % Get parameters using standard second order transfer function form 
 m_eq = abs(reducedDenominator(end-2)/reducedNumerator(end));
 w_n = sqrt(reducedDenominator(end));
@@ -192,6 +221,10 @@ openLoop_nominal = controller_nominal * plant_voltage_to_angle_nominal;
 [gainMargin_nominal_abs, phaseMargin_nominal_deg, ~ , gainCrossFreq_nominal_rad_s] = ...
     margin(openLoop_nominal);
 
+[gainMargin_nominal_abs, phaseMargin_nominal_deg, gainCrossFreq_nominal_rad_s] = ...
+    checkMargins('nominal plant + nominal controller', ...
+    gainMargin_nominal_abs, phaseMargin_nominal_deg, gainCrossFreq_nominal_rad_s);
+
 
 %% SPACAR Model without actuator dynamics (force to sensor displacement)
 plant_force_to_sensor_mech = -tf(plant_force_to_outputs_mech(sensorDisplacementOutputIndex,1));
@@ -204,6 +237,12 @@ openLoop_spacarMechanical = controller_nominal * plant_force_to_sensor_mech;
     ~, gainCrossFreq_spacarMechanical_rad_s] = ...
     margin(openLoop_spacarMechanical);
 
+[gainMargin_spacarMechanical_abs, phaseMargin_spacarMechanical_deg, ...
+    gainCrossFreq_spacarMechanical_rad_s] = ...
+    checkMargins('SPACAR mechanical + nominal controller', ...
+    gainMargin_spacarMechanical_abs, phaseMargin_spacarMechanical_deg, ...
+    gainCrossFreq_spacarMechanical_rad_s);
+
 
 %% SPACAR Model with actuator dynamics (Back EMF) (voltage to sensor displacement) 
 openLoop_electromechanical_nominalController = ...
@@ -213,6 +252,12 @@ openLoop_electromechanical_nominalController = ...
 [gainMargin_electromechanical_abs, phaseMargin_electromechanical_deg, ...
     ~, gainCrossFreq_electromechanical_rad_s] = ...
     margin(openLoop_electromechanical_nominalController);
+
+[gainMargin_electromechanical_abs, phaseMargin_electromechanical_deg, ...
+    gainCrossFreq_electromechanical_rad_s] = ...
+    checkMargins('electromechanical + nominal controller', ...
+    gainMargin_electromechanical_abs, phaseMargin_electromechanical_deg, ...
+    gainCrossFreq_electromechanical_rad_s);
 
 %% Retuned controller
 targetCrossover_rad_s = p.ctrl.wc_rads;
@@ -246,13 +291,22 @@ closedLoop_retuned = feedback(openLoop_retuned, 1);
     ~, gainCrossFreq_retuned_rad_s] = ...
     margin(openLoop_retuned);
 
+[gainMargin_retuned_abs, phaseMargin_retuned_deg, gainCrossFreq_retuned_rad_s] = ...
+    checkMargins('electromechanical + retuned controller', ...
+    gainMargin_retuned_abs, phaseMargin_retuned_deg, gainCrossFreq_retuned_rad_s);
+
 gainMargin_retuned_dB = 20*log10(gainMargin_retuned_abs);
 
 %% Check for stability using poles 
-if all(real(pole(closedLoop_retuned)) < 0)
+isClosedLoopStable_retuned = all(real(pole(closedLoop_retuned)) < 0);
+
+if isClosedLoopStable_retuned
     fprintf('  Closed-loop Stable\n');
 else
-    fprintf('  Closed-loop Unstable\n');
+    warning('simulation:closedLoopUnstable', ...
+        ['Retuned closed loop is unstable: %d of %d poles have non-negative real ', ...
+         'part. Downstream discretisation results are not valid.'], ...
+        sum(real(pole(closedLoop_retuned)) >= 0), numel(pole(closedLoop_retuned)));
 end
 
 %% Summary table
@@ -367,7 +421,29 @@ simulation.PM_em = phaseMargin_electromechanical_deg;
 simulation.GM_nom_dB = 20*log10(gainMargin_nominal_abs);
 simulation.GM_mech_dB = 20*log10(gainMargin_spacarMechanical_abs);
 simulation.GM_em_dB = 20*log10(gainMargin_electromechanical_abs);
+simulation.isClosedLoopStable_retuned = isClosedLoopStable_retuned;
 
+end
+
+function [gainMargin_abs, phaseMargin_deg, gainCrossFreq_rad_s] = ...
+    checkMargins(label, gainMargin_abs, phaseMargin_deg, gainCrossFreq_rad_s)
+% margin() returns empty or NaN when no crossover exists. Without this check
+% those values print as NaN in the summary table and are packed into the
+% output struct as if they were valid margins.
+if isempty(gainMargin_abs);     gainMargin_abs = NaN;     end
+if isempty(phaseMargin_deg);    phaseMargin_deg = NaN;    end
+if isempty(gainCrossFreq_rad_s); gainCrossFreq_rad_s = NaN; end
+
+if ~isfinite(phaseMargin_deg) || ~isfinite(gainCrossFreq_rad_s)
+    warning('simulation:noCrossover', ...
+        ['No valid gain crossover found for %s (PM = %g deg, wc = %g rad/s); ', ...
+         'the reported margins for this configuration are meaningless.'], ...
+        label, phaseMargin_deg, gainCrossFreq_rad_s);
+elseif phaseMargin_deg <= 0
+    warning('simulation:nonPositivePhaseMargin', ...
+        'Phase margin for %s is %.2f deg, i.e. the open loop is not stable.', ...
+        label, phaseMargin_deg);
+end
 end
 
 function controller_tf = build_pid(m_eq, wc_rad_s, alpha, beta, s)

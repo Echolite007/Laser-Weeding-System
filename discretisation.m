@@ -1,5 +1,13 @@
 function discretized_system = discretisation(p, controller_design, sim_out)
 
+requiredSimFields = {'wc_target', 'plant_voltage_to_sensor_reduced', ...
+    'controller_retunedPID', 'm_eq', 'alpha'};
+missing = requiredSimFields(~isfield(sim_out, requiredSimFields));
+if ~isempty(missing)
+    error('discretisation:missingSimulationOutput', ...
+        'Simulation output is missing required field(s): %s.', strjoin(missing, ', '));
+end
+
 %% Setup
 s = tf('s');
 
@@ -37,12 +45,26 @@ closedLoop_discrete_original = feedback(openLoop_discrete_original, 1);
     phaseCrossFreq_disc_rad_s, gainCrossFreq_disc_rad_s] = ...
     margin(openLoop_discrete_original);
 
+[gainMargin_cont_abs, phaseMargin_cont_deg, gainCrossFreq_cont_rad_s] = ...
+    checkMargins('continuous open loop', ...
+    gainMargin_cont_abs, phaseMargin_cont_deg, gainCrossFreq_cont_rad_s);
+
+[gainMargin_disc_abs, phaseMargin_disc_deg, gainCrossFreq_disc_rad_s] = ...
+    checkMargins('discrete open loop, original alpha', ...
+    gainMargin_disc_abs, phaseMargin_disc_deg, gainCrossFreq_disc_rad_s);
+
 phaseMarginLoss_deg = phaseMargin_cont_deg - phaseMargin_disc_deg;
 crossoverShift_percent = ...
     (gainCrossFreq_disc_rad_s - gainCrossFreq_cont_rad_s)/gainCrossFreq_cont_rad_s*100;
 
 numUnstablePoles_original = sum(abs(pole(closedLoop_discrete_original)) > 1);
 isClosedLoopStable_original = (numUnstablePoles_original == 0);
+
+if ~isClosedLoopStable_original
+    warning('discretisation:closedLoopUnstable', ...
+        ['Discrete closed loop with the original alpha has %d pole(s) outside the unit ', ...
+         'circle.'], numUnstablePoles_original);
+end
 
 %% Step j.2: Quantify phase-lag source
 zohHalfSampleLag_deg = sampleTime_s * gainCrossFreq_cont_rad_s / 2 * (180/pi);
@@ -112,8 +134,31 @@ closedLoop_discrete_retuned = feedback(openLoop_discrete_retuned, 1);
     phaseCrossFreq_discRetuned_rad_s, gainCrossFreq_discRetuned_rad_s] = ...
     margin(openLoop_discrete_retuned);
 
+[gainMargin_contRetuned_abs, phaseMargin_contRetuned_deg, gainCrossFreq_contRetuned_rad_s] = ...
+    checkMargins('continuous open loop, retuned for discretisation', ...
+    gainMargin_contRetuned_abs, phaseMargin_contRetuned_deg, gainCrossFreq_contRetuned_rad_s);
+
+[gainMargin_discRetuned_abs, phaseMargin_discRetuned_deg, gainCrossFreq_discRetuned_rad_s] = ...
+    checkMargins('discrete open loop, retuned alpha', ...
+    gainMargin_discRetuned_abs, phaseMargin_discRetuned_deg, gainCrossFreq_discRetuned_rad_s);
+
 numUnstablePoles_retuned = sum(abs(pole(closedLoop_discrete_retuned)) > 1);
 isClosedLoopStable_retuned = (numUnstablePoles_retuned == 0);
+
+if ~isClosedLoopStable_retuned
+    warning('discretisation:closedLoopUnstable', ...
+        ['Discrete closed loop with the retuned alpha has %d pole(s) outside the unit ', ...
+         'circle; the retuned controller is not implementable at ts = %.4g s.'], ...
+        numUnstablePoles_retuned, sampleTime_s);
+end
+
+if isfinite(gainCrossFreq_discRetuned_rad_s) && ...
+        gainCrossFreq_discRetuned_rad_s > 0.3*nyquistFrequency_rad_s
+    warning('discretisation:crossoverNearNyquist', ...
+        ['Discrete crossover %.1f rad/s is above 30%% of the Nyquist frequency ', ...
+         '%.1f rad/s; the sampled-data margins are unreliable.'], ...
+        gainCrossFreq_discRetuned_rad_s, nyquistFrequency_rad_s);
+end
 
 %% Summary table
 fprintf('\n--- Deliverable j summary table ---\n');
@@ -268,4 +313,24 @@ discretized_system.wc_disc = gainCrossFreq_disc_rad_s;
 discretized_system.wc_retuned = gainCrossFreq_discRetuned_rad_s;
 discretized_system.phase_lag_ZoH_deg = zohHalfSampleLag_deg;
 
+end
+
+function [gainMargin_abs, phaseMargin_deg, gainCrossFreq_rad_s] = ...
+    checkMargins(label, gainMargin_abs, phaseMargin_deg, gainCrossFreq_rad_s)
+% margin() returns empty or NaN when no crossover exists. Report that instead
+% of packing meaningless numbers into the summary table and output struct.
+if isempty(gainMargin_abs);      gainMargin_abs = NaN;      end
+if isempty(phaseMargin_deg);     phaseMargin_deg = NaN;     end
+if isempty(gainCrossFreq_rad_s); gainCrossFreq_rad_s = NaN; end
+
+if ~isfinite(phaseMargin_deg) || ~isfinite(gainCrossFreq_rad_s)
+    warning('discretisation:noCrossover', ...
+        ['No valid gain crossover found for %s (PM = %g deg, wc = %g rad/s); ', ...
+         'the reported margins for this configuration are meaningless.'], ...
+        label, phaseMargin_deg, gainCrossFreq_rad_s);
+elseif phaseMargin_deg <= 0
+    warning('discretisation:nonPositivePhaseMargin', ...
+        'Phase margin for %s is %.2f deg, i.e. the open loop is not stable.', ...
+        label, phaseMargin_deg);
+end
 end
