@@ -1,19 +1,21 @@
-clear; clc; close all 
+clear;
+clc;
+close all;
 
-% SPACAR Path 
+% SPACAR Path
 addpath('spacar');
 addpath('spacar\spalight-1.38');
 
-% Shared helper functions 
+% Shared helper functions
 addpath('utils');
 
-% Load parameters 
-params = parameters(); 
+% Load parameters
+params = parameters();
 
-% Load reference 
+% Load reference
 ref = reference(params.spec.driving_speed_nom_mps, params.spec.weeding_time_s, params.spec.return_time_s, 1e-4);
 
-% Nominal plant sizing - Deliverable b 
+% Nominal plant sizing - Deliverable b
 nominal_plant_sizing = nominal_plant_sizing(params, ref);
 
 % Store nominal plant sizes in params structure under mech
@@ -25,19 +27,19 @@ params.mech.d_Nms_per_rad = nominal_plant_sizing.d_Nms_per_rad;
 % Define Laplace variable s
 s_var = tf('s');
 
-% Nominal Continuous plant: Voltage to Mirror Angle 
+% Nominal Continuous plant: Voltage to Mirror Angle
 P_nom = nominal_plant_tf(params.mech, params.actuator, s_var);
 
-% Controller design 
+% Controller design
 controller_design = controller_design(params, nominal_plant_sizing, ref);
 
 % Simulation output
 spacar_sim_out = simulation(params, nominal_plant_sizing, controller_design);
 
-% Discretization 
+% Discretization
 discretized_system = discretisation(params, controller_design, spacar_sim_out);
 
-% Simulink parameters 
+% Simulink parameters
 ts = 5e-4;
 r_sensor = 0.052;
 

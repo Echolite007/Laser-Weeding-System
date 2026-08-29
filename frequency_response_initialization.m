@@ -1,22 +1,21 @@
-%% Logarithmic chirp 
+%% Logarithmic chirp
 %% Averaging over 5 points and reduce to one
 
-
 %% Deliverable P - Initialization Script
-clc; close all;
-
+clc;
+close all;
 
 Umax = 6.4512;          % [V]
 GainU = 0.5;           % [-] recommended first test: 0.05 to 0.10
 
 K_sign = 1;             % [-]
 
-%% Type 
+%% Type
 % inputType = 0 -> multisine
 % inputType = 1 -> chirp
 inputType = 1;
 
-%% Simulation properties 
+%% Simulation properties
 ts = 5e-4;             % [s]
 
 % Period time for multisine.
@@ -29,11 +28,11 @@ T = 50;                 % [s]
 Nr = 10;                % [-]
 
 % Total experiment duration.
-Ttot = Nr*T;            % [s]
+Ttot = Nr * T;            % [s]
 
 multisineFrequencies_Hz = [0.5 1 2 3 5 7 9 12 15 17 20 25 30 40 50 70 90 120 160 200 250];
 
-multisineFrequencies = 2*pi*multisineFrequencies_Hz;   % [rad/s]
+multisineFrequencies = 2 * pi * multisineFrequencies_Hz;   % [rad/s]
 
 %% Chirp properties
 
@@ -54,9 +53,9 @@ He = [];
 
 %% Derived check
 
-fs = 1/ts;              % [Hz]
-fNyq = fs/2;            % [Hz]
-fResolution = 1/T;      % [Hz]
+fs = 1 / ts;              % [Hz]
+fNyq = fs / 2;            % [Hz]
+fResolution = 1 / T;      % [Hz]
 
 fprintf('\nDeliverable P initialization complete.\n');
 fprintf('Sample time ts          = %.6g s\n', ts);
